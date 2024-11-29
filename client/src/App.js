@@ -1,25 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import Web3 from 'web3';
 import Crowdfunding from './contracts/Crowdfunding.json';
-// import './App.css';
-
-
-// Import Material-UI components
-import {
-  Container,
-  Typography,
-  TextField,
-  Button,
-  Grid,
-  Card,
-  CardContent,
-  CardActions,
-  InputAdornment,
-  LinearProgress,
-} from '@mui/material';
+import { Container, Typography, TextField, Button, Grid, Card, CardContent, InputAdornment, LinearProgress } from '@mui/material';
 import { makeStyles } from '@mui/styles';
 
-// Custom styles using makeStyles
 const useStyles = makeStyles({
   form: {
     marginTop: '2rem',
@@ -34,7 +18,6 @@ const useStyles = makeStyles({
 
 function App() {
   const classes = useStyles();
-
   const [web3, setWeb3] = useState(null);
   const [account, setAccount] = useState('');
   const [crowdfunding, setCrowdfunding] = useState(null);
@@ -43,35 +26,30 @@ function App() {
     title: '',
     description: '',
     fundingGoal: '',
+    deadline: '',
   });
 
   useEffect(() => {
     const init = async () => {
-      // Check if MetaMask is available
       if (window.ethereum) {
         try {
-          // Request account access
           await window.ethereum.request({ method: 'eth_requestAccounts' });
           const web3Instance = new Web3(window.ethereum);
           setWeb3(web3Instance);
 
-          // Get network ID
           const networkId = await web3Instance.eth.net.getId();
           const deployedNetwork = Crowdfunding.networks[networkId];
-
           if (!deployedNetwork) {
             alert('Smart contract not deployed on the current network. Please switch networks in MetaMask.');
             return;
           }
 
-          // Create contract instance
           const instance = new web3Instance.eth.Contract(
             Crowdfunding.abi,
             deployedNetwork.address
           );
           setCrowdfunding(instance);
 
-          // Get user accounts
           const accounts = await web3Instance.eth.getAccounts();
           if (accounts.length === 0) {
             alert('No accounts found. Please connect your MetaMask account.');
@@ -79,7 +57,6 @@ function App() {
           }
           setAccount(accounts[0]);
 
-          // Load existing projects
           loadProjects(instance);
         } catch (error) {
           console.error('Error connecting to MetaMask:', error);
@@ -103,44 +80,78 @@ function App() {
   };
 
   const handleInputChange = (e) => {
-    setProjectForm({
-      ...projectForm,
-      [e.target.name]: e.target.value,
-    });
+    const { name, value } = e.target;
+    setProjectForm((prevForm) => ({
+      ...prevForm,
+      [name]: value,
+    }));
   };
 
   const createProject = async (e) => {
     e.preventDefault();
-    const { title, description, fundingGoal } = projectForm;
+    const { title, description, fundingGoal, deadline } = projectForm;
+    if (!title || !description || !fundingGoal || !deadline) {
+      alert('All fields are required.');
+      return;
+    }
 
-    // Input validation
-    if (!title || !description || !fundingGoal || parseFloat(fundingGoal) <= 0) {
-      alert('Please enter valid project details.');
+    const fundingGoalNumber = parseFloat(fundingGoal);
+    if (isNaN(fundingGoalNumber) || fundingGoalNumber <= 0) {
+      alert('Funding goal must be a positive number.');
+      return;
+    }
+
+    const fundingGoalWei = web3.utils.toWei(fundingGoalNumber.toString(), 'ether');
+
+    const [year, month, day] = deadline.split('-').map(Number);
+    const deadlineDate = new Date(Date.UTC(year, month - 1, day, 23, 59, 59));
+    if (isNaN(deadlineDate.getTime())) {
+      alert('Invalid deadline date.');
+      return;
+    }
+    const deadlineTimestamp = Math.floor(deadlineDate.getTime() / 1000);
+
+    if (deadlineTimestamp <= Math.floor(Date.now() / 1000)) {
+      alert('Deadline must be in the future.');
       return;
     }
 
     try {
+      const gasEstimate = await crowdfunding.methods
+        .createProject(
+          title,
+          description,
+          fundingGoalWei,
+          deadlineTimestamp
+        )
+        .estimateGas({ from: account });
+
       await crowdfunding.methods
         .createProject(
           title,
           description,
-          web3.utils.toWei(fundingGoal, 'ether')
+          fundingGoalWei,
+          deadlineTimestamp
         )
-        .send({ from: account });
-      // Reset form fields
-      setProjectForm({ title: '', description: '', fundingGoal: '' });
-      // Refresh projects list
+        .send({ from: account, gas: gasEstimate });
+
+      setProjectForm({
+        title: '',
+        description: '',
+        fundingGoal: '',
+        deadline: '',
+      });
       loadProjects(crowdfunding);
     } catch (error) {
       console.error('Error creating project:', error);
-      alert('Error creating project. See console for details.');
+      const revertReason = error?.data?.message || error.message || 'Transaction reverted';
+      alert(`Error creating project: ${revertReason}`);
     }
   };
 
   const withdrawFunds = async (projectId) => {
     try {
       await crowdfunding.methods.withdrawFunds(projectId).send({ from: account });
-      // Refresh projects list
       loadProjects(crowdfunding);
     } catch (error) {
       console.error('Error withdrawing funds:', error);
@@ -148,7 +159,6 @@ function App() {
     }
   };
 
-  // Event listeners for real-time updates
   useEffect(() => {
     if (crowdfunding) {
       crowdfunding.events.ProjectCreated({}, (error) => {
@@ -158,7 +168,6 @@ function App() {
           loadProjects(crowdfunding);
         }
       });
-
       crowdfunding.events.Funded({}, (error) => {
         if (error) {
           console.error('Error in Funded event listener:', error);
@@ -166,7 +175,6 @@ function App() {
           loadProjects(crowdfunding);
         }
       });
-
       crowdfunding.events.FundsWithdrawn({}, (error) => {
         if (error) {
           console.error('Error in FundsWithdrawn event listener:', error);
@@ -185,9 +193,7 @@ function App() {
       <Typography variant="subtitle1" align="center" gutterBottom>
         Your account: {account}
       </Typography>
-
       <Grid container spacing={4}>
-        {/* Project Creation Form */}
         <Grid item xs={12} sm={6}>
           <Typography variant="h5">Create a New Project</Typography>
           <form onSubmit={createProject} className={classes.form}>
@@ -224,13 +230,24 @@ function App() {
                 inputProps: { min: 0, step: 'any' },
               }}
             />
+            <TextField
+              label="Project Deadline"
+              name="deadline"
+              value={projectForm.deadline}
+              onChange={handleInputChange}
+              fullWidth
+              required
+              margin="normal"
+              type="date"
+              InputLabelProps={{
+                shrink: true,
+              }}
+            />
             <Button variant="contained" color="primary" type="submit" style={{ marginTop: '1rem' }}>
               Create Project
             </Button>
           </form>
         </Grid>
-
-        {/* Available Projects */}
         <Grid item xs={12} sm={6}>
           <Typography variant="h5">Available Projects</Typography>
           {projects.length > 0 ? (
@@ -249,6 +266,14 @@ function App() {
                     <strong>Total Funds:</strong>{' '}
                     {web3 && web3.utils.fromWei(project.totalFunds, 'ether')} ETH
                   </Typography>
+                  <Typography variant="body2">
+                    <strong>Deadline:</strong> {new Date(Number(project.deadline) * 1000).toLocaleDateString()}
+                  </Typography>
+                  <Typography variant="body2" color="error">
+                    {Number(project.deadline) * 1000 > Date.now()
+                      ? `${Math.ceil((Number(project.deadline) * 1000 - Date.now()) / (1000 * 60 * 60 * 24))} days remaining`
+                      : 'Deadline passed'}
+                  </Typography>
                   <LinearProgress
                     variant="determinate"
                     value={
@@ -261,7 +286,6 @@ function App() {
                   <Typography variant="body2" color="textSecondary">
                     {project.isOpen ? 'Open for funding' : 'Funding closed'}
                   </Typography>
-
                   {project.isOpen && (
                     <FundProject
                       crowdfunding={crowdfunding}
@@ -271,11 +295,10 @@ function App() {
                       web3={web3}
                     />
                   )}
-
                   {project.isOpen &&
                     project.creator.toLowerCase() === account.toLowerCase() &&
                     parseFloat(web3.utils.fromWei(project.totalFunds, 'ether')) >=
-                    parseFloat(web3.utils.fromWei(project.fundingGoal, 'ether')) && (
+                      parseFloat(web3.utils.fromWei(project.fundingGoal, 'ether')) && (
                       <Button
                         onClick={() => withdrawFunds(project.id)}
                         variant="contained"
@@ -301,22 +324,15 @@ function FundProject({ crowdfunding, project, account, refreshProjects, web3 }) 
   const [amount, setAmount] = useState('');
 
   const fund = async () => {
-    // Input validation
     if (!amount || parseFloat(amount) <= 0) {
       alert('Please enter a valid funding amount.');
       return;
     }
-
     try {
       await crowdfunding.methods
         .fundProject(project.id)
-        .send({
-          from: account,
-          value: web3.utils.toWei(amount, 'ether'),
-        });
-      // Reset amount field
+        .send({ from: account, value: web3.utils.toWei(amount, 'ether') });
       setAmount('');
-      // Refresh projects list
       refreshProjects();
     } catch (error) {
       console.error('Error funding project:', error);
