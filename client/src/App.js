@@ -22,6 +22,7 @@ function App() {
   const [account, setAccount] = useState('');
   const [crowdfunding, setCrowdfunding] = useState(null);
   const [projects, setProjects] = useState([]);
+  // const [userName, setUserName] = useState('');
   const [projectForm, setProjectForm] = useState({
     title: '',
     description: '',
@@ -78,6 +79,46 @@ function App() {
     }
     setProjects(projectsList);
   };
+
+  const [topDonors, setTopDonors] = useState([]);
+  useEffect(() => {
+    const loadTopDonors = (projectId) => {
+    crowdfunding.methods.getDonations(projectId).call().then((donations) => {
+      // Sort donations by amount (descending order)
+      donations.sort((a, b) => parseFloat(b.amount) - parseFloat(a.amount));
+      setTopDonors((prevDonors) => ({
+        ...prevDonors,
+        [projectId]: donations.slice(0, 3), // Store top 3 donors for each project
+      }));
+    });
+  };
+  
+    if (projects.length > 0) {
+      projects.forEach((project) => {
+        loadTopDonors(project.id);
+      });
+    }
+  }, [projects, crowdfunding]);
+
+  // const loadTopDonors = (projectId) => {
+  //   crowdfunding.methods.getDonations(projectId).call().then((donations) => {
+  //     // Sort donations by amount (descending order)
+  //     donations.sort((a, b) => parseFloat(b.amount) - parseFloat(a.amount));
+  //     setTopDonors((prevDonors) => ({
+  //       ...prevDonors,
+  //       [projectId]: donations.slice(0, 3), // Store top 3 donors for each project
+  //     }));
+  //   });
+  // };
+
+  
+  // useEffect(() => {
+  //   if (projects.length > 0) {
+  //     projects.forEach((project) => {
+  //       loadTopDonors(project.id);
+  //     });
+  //   }
+  // }, [projects]);
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
@@ -283,6 +324,17 @@ function App() {
                     }
                     style={{ marginTop: '1rem' }}
                   />
+                  {/* Show top donors for this project */}
+                  {topDonors[project.id] && topDonors[project.id].length > 0 && (
+                    <div>
+                      <Typography variant="h6">Top Donors:</Typography>
+                      {topDonors[project.id].map((donor, index) => (
+                        <Typography key={index} variant="body2">
+                          {donor.contributor}: {web3.utils.fromWei(donor.amount, 'ether')} ETH
+                        </Typography>
+                      ))}
+                    </div>
+                  )}
                   <Typography variant="body2" color="textSecondary">
                     {project.isOpen ? 'Open for funding' : 'Funding closed'}
                   </Typography>
@@ -322,6 +374,7 @@ function App() {
 
 function FundProject({ crowdfunding, project, account, refreshProjects, web3 }) {
   const [amount, setAmount] = useState('');
+  const [comment, setComment] = useState('');
 
   const fund = async () => {
     if (!amount || parseFloat(amount) <= 0) {
@@ -330,9 +383,10 @@ function FundProject({ crowdfunding, project, account, refreshProjects, web3 }) 
     }
     try {
       await crowdfunding.methods
-        .fundProject(project.id)
+        .fundProject(project.id, comment)
         .send({ from: account, value: web3.utils.toWei(amount, 'ether') });
       setAmount('');
+      setComment('');
       refreshProjects();
     } catch (error) {
       console.error('Error funding project:', error);
@@ -354,6 +408,16 @@ function FundProject({ crowdfunding, project, account, refreshProjects, web3 }) 
           inputProps: { min: 0, step: 'any' },
           endAdornment: <InputAdornment position="end">ETH</InputAdornment>,
         }}
+      />
+      <TextField
+        label="Comment"
+        value={comment}
+        onChange={(e) => setComment(e.target.value)}
+        fullWidth
+        margin="normal"
+        multiline
+        rows={4}
+        placeholder="Words of support"
       />
       <Button variant="contained" color="primary" onClick={fund}>
         Fund Project
