@@ -6,24 +6,23 @@ contract Crowdfunding {
         uint256 id;
         string title;
         string description;
-        uint256 fundingGoal;
-        uint256 totalFunds;
+        uint256 fundingGoal; // In Wei
+        uint256 totalFunds;  // In Wei
         address payable creator;
         bool isOpen;
-        uint256 deadline; // New field for deadline (timestamp)
+        uint256 deadline; // Timestamp
     }
 
     struct Donation {
         address contributor;
-        uint256 amount;
-        string comment; // Store the comment here
+        uint256 amount;   // In Wei
+        string comment;
     }
 
     uint256 public projectCount = 0;
     mapping(uint256 => Project) public projects;
-    mapping(uint256 => Donation[]) public donations; // Store donations with comments
-    mapping(uint256 => mapping(address => uint256)) public contributions;
-    mapping(address => string) public userNames; // Mapping to store user names
+    mapping(uint256 => Donation[]) public donations; // projectId => Donation[]
+    mapping(uint256 => mapping(address => uint256)) public contributions; // projectId => contributor => amount
 
     event ProjectCreated(
         uint256 id,
@@ -42,11 +41,12 @@ contract Crowdfunding {
 
     event FundsWithdrawn(uint256 id, uint256 amount);
 
+    // Create a new project
     function createProject(
         string memory _title,
         string memory _description,
-        uint256 _fundingGoal,
-        uint256 _deadline
+        uint256 _fundingGoal, // In Wei
+        uint256 _deadline      // Timestamp
     ) public {
         require(bytes(_title).length > 0, "Title is required");
         require(bytes(_description).length > 0, "Description is required");
@@ -74,35 +74,32 @@ contract Crowdfunding {
         );
     }
 
+    // Fund a project
     function fundProject(uint256 _id, string memory _comment) public payable {
         Project storage project = projects[_id];
         require(project.isOpen, "Project is not open for funding");
-        require(
-            block.timestamp < project.deadline,
-            "Project funding deadline has passed"
-        );
+        require(block.timestamp < project.deadline, "Funding deadline has passed");
         require(msg.value > 0, "Contribution must be greater than zero");
 
         project.totalFunds += msg.value;
         contributions[_id][msg.sender] += msg.value;
 
-        // Store donation with comment
         donations[_id].push(Donation(msg.sender, msg.value, _comment));
 
         emit Funded(_id, msg.sender, msg.value, _comment);
+
+        // Close project if funding goal is reached
+        if (project.totalFunds >= project.fundingGoal) {
+            project.isOpen = false;
+        }
     }
 
+    // Withdraw funds from a project
     function withdrawFunds(uint256 _id) public {
         Project storage project = projects[_id];
-        require(
-            msg.sender == project.creator,
-            "Only creator can withdraw funds"
-        );
-        require(
-            project.totalFunds >= project.fundingGoal,
-            "Funding goal not reached"
-        );
-        require(project.isOpen, "Project is already closed");
+        require(msg.sender == project.creator, "Only creator can withdraw funds");
+        require(project.totalFunds >= project.fundingGoal, "Funding goal not reached");
+        require(project.isOpen == false, "Project is still open");
 
         uint256 amount = project.totalFunds;
         project.totalFunds = 0;
@@ -113,17 +110,7 @@ contract Crowdfunding {
         emit FundsWithdrawn(_id, amount);
     }
 
-    // Function to set name
-    function setUserName(string memory _name) public {
-        userNames[msg.sender] = _name;
-    }
-
-    // Function to get user name
-    function getUserName(address _user) public view returns (string memory) {
-        return userNames[_user];
-    }
-
-    // Function to get donations for a project
+    // Get all donations for a project
     function getDonations(uint256 _id) public view returns (Donation[] memory) {
         return donations[_id];
     }
