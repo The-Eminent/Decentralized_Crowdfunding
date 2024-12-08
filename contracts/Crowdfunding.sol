@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
+interface IMultiSigApprover {
+    function isApproved(uint256 projectId) external view returns (bool);
+}
+
 contract Crowdfunding {
     struct Project {
         uint256 id;
@@ -41,7 +45,14 @@ contract Crowdfunding {
 
     event FundsWithdrawn(uint256 id, uint256 amount);
 
-    // Create a new project
+    IMultiSigApprover public multiSigApprover;
+
+    function setMultiSigApprover(address _approver) public {
+        // For simplicity, anyone can set it once; in production, restrict this to contract owner
+        require(address(multiSigApprover) == address(0), "Already set");
+        multiSigApprover = IMultiSigApprover(_approver);
+    }
+
     function createProject(
         string memory _title,
         string memory _description,
@@ -74,7 +85,6 @@ contract Crowdfunding {
         );
     }
 
-    // Fund a project
     function fundProject(uint256 _id, string memory _comment) public payable {
         Project storage project = projects[_id];
         require(project.isOpen, "Project is not open for funding");
@@ -94,23 +104,22 @@ contract Crowdfunding {
         }
     }
 
-    // Withdraw funds from a project
     function withdrawFunds(uint256 _id) public {
         Project storage project = projects[_id];
         require(msg.sender == project.creator, "Only creator can withdraw funds");
         require(project.totalFunds >= project.fundingGoal, "Funding goal not reached");
         require(project.isOpen == false, "Project is still open");
+        require(address(multiSigApprover) != address(0), "MultiSigApprover not set");
+        require(multiSigApprover.isApproved(_id), "Not approved by all trusted signers");
 
         uint256 amount = project.totalFunds;
         project.totalFunds = 0;
-        project.isOpen = false;
-
+        // project.isOpen = false; // Already closed when goal reached
         project.creator.transfer(amount);
 
         emit FundsWithdrawn(_id, amount);
     }
 
-    // Get all donations for a project
     function getDonations(uint256 _id) public view returns (Donation[] memory) {
         return donations[_id];
     }

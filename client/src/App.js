@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import Web3 from 'web3';
 import Crowdfunding from './contracts/Crowdfunding.json';
 import NameRegistryABI from './contracts/NameRegistry.json';
+import MultiSigApproverABI from './contracts/MultiSigApprover.json'; // New contract ABI
 import {
   Container,
   Typography,
@@ -16,7 +17,6 @@ import {
   Paper,
 } from '@mui/material';
 import { makeStyles } from '@mui/styles';
-import axios from 'axios'; // Removed axios usage for ETH rate fetching
 
 const useStyles = makeStyles({
   form: {
@@ -38,8 +38,17 @@ const useStyles = makeStyles({
   },
 });
 
-// Define a fixed ETH rate for the session (e.g., 2000 USD per ETH)
-const ETH_RATE_USD = 2000; // You can adjust this value as needed
+// Fixed ETH rate for session
+const ETH_RATE_USD = 2000; 
+
+// Set your MultiSigApprover deployed address here:
+const MULTISIG_APPROVER_ADDRESS = "0x5c27148ffDDcEE987B2e230379D337e73deb5a7e";
+
+// Trusted signers array used when deploying MultiSigApprover
+const TRUSTED_SIGNERS = [
+  "0x2D2504547d770Cac8F61DbBc71bA3E74d49D3F26",
+  "0xd33189d58ADe7bCA3a8F696cf761e74820DD2629"
+];
 
 function App() {
   const classes = useStyles();
@@ -57,24 +66,20 @@ function App() {
     deadline: '',
   });
 
-  // Initialize Web3 and connect to contracts
+  const [multiSigApprover, setMultiSigApprover] = useState(null);
+
   useEffect(() => {
     const init = async () => {
       if (window.ethereum) {
         try {
-          // Request account access if needed
           await window.ethereum.request({ method: 'eth_requestAccounts' });
-
-          // We don't need to fetch ETH rate anymore
           const web3Instance = new Web3(window.ethereum);
           setWeb3(web3Instance);
 
           const networkId = await web3Instance.eth.net.getId();
           const deployedNetwork = Crowdfunding.networks[networkId];
           if (!deployedNetwork) {
-            alert(
-              'Crowdfunding contract not deployed on the current network. Please switch networks in MetaMask.'
-            );
+            alert('Crowdfunding contract not deployed on this network.');
             return;
           }
 
@@ -86,15 +91,14 @@ function App() {
 
           const accounts = await web3Instance.eth.getAccounts();
           if (accounts.length === 0) {
-            alert('No accounts found. Please connect your MetaMask account.');
+            alert('No accounts found. Please connect MetaMask.');
             return;
           }
           setAccount(accounts[0]);
 
-          // Interact with NameRegistry contract
           const nameRegistryNetwork = NameRegistryABI.networks[networkId];
           if (!nameRegistryNetwork) {
-            alert('NameRegistry contract not deployed on the current network.');
+            alert('NameRegistry not deployed on this network.');
             return;
           }
 
@@ -104,259 +108,182 @@ function App() {
           );
           setNameRegistry(nameRegistryInstance);
 
-          // Fetch the name linked to the user's address
-          const storedName = await nameRegistryInstance.methods
-            .getName(accounts[0])
-            .call();
+          const storedName = await nameRegistryInstance.methods.getName(accounts[0]).call();
           setUserName(storedName || 'No name registered');
+
+          if (MULTISIG_APPROVER_ADDRESS !== "0xYourDeployedMultiSigApproverAddressHere") {
+            const multiSigInstance = new web3Instance.eth.Contract(
+              MultiSigApproverABI.abi,
+              MULTISIG_APPROVER_ADDRESS
+            );
+            setMultiSigApprover(multiSigInstance);
+          }
+
         } catch (error) {
           console.error('Error connecting to MetaMask:', error);
           alert('Could not connect to MetaMask. See console for details.');
         }
       } else {
-        alert('MetaMask is not installed. Please install it to use this app.');
+        alert('MetaMask not installed.');
       }
     };
     init();
   }, []);
 
-  // Load all projects once contracts are initialized
   useEffect(() => {
     if (crowdfunding && nameRegistry) {
       loadProjects();
     }
   }, [crowdfunding, nameRegistry]);
 
-  // Function to load all projects
   const loadProjects = async () => {
     try {
       const projectCount = await crowdfunding.methods.projectCount().call();
       const projectsList = [];
-
       for (let i = 1; i <= projectCount; i++) {
         const project = await crowdfunding.methods.projects(i).call();
-
-        // Fetch the creator's name from the NameRegistry contract
-        const creatorName = await nameRegistry.methods
-          .getName(project.creator)
-          .call();
-        project.creatorName = creatorName || project.creator; // Use name or fallback to address
-
+        const creatorName = await nameRegistry.methods.getName(project.creator).call();
+        project.creatorName = creatorName || project.creator;
         projectsList.push(project);
       }
-
       setProjects(projectsList);
     } catch (error) {
       console.error('Error loading projects:', error);
     }
   };
 
-  // Load top donors for each project
   useEffect(() => {
     const loadTopDonors = async (projectId) => {
       try {
         const donations = await crowdfunding.methods.getDonations(projectId).call();
-
-        // Sort donations by amount (descending order)
         donations.sort((a, b) => parseFloat(b.amount) - parseFloat(a.amount));
-
-        // Take top 3 donors
-        const topThree = donations.slice(0, 3).map((d) => ({
-          ...d,
-          projectId,
-        }));
-
-        // Fetch donor names
+        const topThree = donations.slice(0, 3).map(d => ({ ...d, projectId }));
         const donorsWithNames = await Promise.all(
           topThree.map(async (donor) => {
             const donorName = await nameRegistry.methods.getName(donor.contributor).call();
             return {
               ...donor,
-              name: donorName || donor.contributor, // Fallback to address if no name
+              name: donorName || donor.contributor,
             };
           })
         );
-
-        setTopDonors((prevState) => ({
-          ...prevState,
-          [projectId]: donorsWithNames,
-        }));
+        setTopDonors((prev) => ({ ...prev, [projectId]: donorsWithNames }));
       } catch (error) {
         console.error('Error loading top donors:', error);
       }
     };
 
     if (projects.length > 0) {
-      projects.forEach((project) => {
-        loadTopDonors(project.id);
-      });
+      projects.forEach((p) => loadTopDonors(p.id));
     }
   }, [projects, crowdfunding, nameRegistry]);
 
-  // Handle input changes for project creation form
   const handleInputChange = (e) => {
     const { name, value } = e.target;
-    setProjectForm((prevForm) => ({
-      ...prevForm,
-      [name]: value,
-    }));
+    setProjectForm((prev) => ({ ...prev, [name]: value }));
   };
 
-  // Function to check if the chosen username is unique
   const isNameTaken = (name) => {
-    // Check all project creators
     for (let proj of projects) {
       if (proj.creatorName === name) return true;
     }
-
-    // Check top donors
     for (let pid in topDonors) {
       for (let donor of topDonors[pid]) {
         if (donor.name === name) return true;
       }
     }
-
     return false;
   };
 
-  // Handle setting the user's name
   const handleSetName = async () => {
     if (!nameRegistry || !account) {
       console.error('nameRegistry or account not ready');
       return;
     }
-
-    if (!userName || userName === 'No name registered') {
+    if (userName === 'No name registered') {
       const name = prompt('Enter your name:');
       if (name) {
-        // Check uniqueness
         if (isNameTaken(name)) {
-          alert('This username is already taken. Please choose another name.');
+          alert('This username is already taken.');
           return;
         }
-
         try {
           await nameRegistry.methods.registerName(name).send({ from: account });
-          setUserName(name); // Update frontend state
-        } catch (error) {
-          console.error('Error registering name:', error);
-          alert('Failed to register name on the blockchain.');
+          setUserName(name);
+        } catch (err) {
+          console.error('Error registering name:', err);
+          alert('Failed to register name.');
         }
       }
     }
   };
 
-  // Handle project creation
   const createProject = async (e) => {
     e.preventDefault();
-    if (!crowdfunding || !web3 || !account) {
-      console.error('crowdfunding, web3 or account is not ready');
-      return;
-    }
-
-    // Ensure the user has set a name
+    if (!crowdfunding || !web3 || !account) return;
     if (userName === 'No name registered') {
-      alert('Please set your name first before creating a project.');
+      alert('Please set your name first.');
       return;
     }
-
     const { title, description, fundingGoalUSD, deadline } = projectForm;
     if (!title || !description || !fundingGoalUSD || !deadline) {
-      alert('All fields are required.');
+      alert('All fields required.');
       return;
     }
-
     const fundingGoalUSDNumber = parseFloat(fundingGoalUSD);
     if (isNaN(fundingGoalUSDNumber) || fundingGoalUSDNumber <= 0) {
-      alert('Funding goal must be a positive number.');
+      alert('Positive funding goal required.');
       return;
     }
-
-    // Convert USD to ETH using the fixed rate
     const fundingGoalETH = fundingGoalUSDNumber / ETH_RATE_USD;
     const fundingGoalWei = web3.utils.toWei(fundingGoalETH.toString(), 'ether');
-
-    // Convert deadline to timestamp
     const [year, month, day] = deadline.split('-').map(Number);
     const deadlineDate = new Date(Date.UTC(year, month - 1, day, 23, 59, 59));
     if (isNaN(deadlineDate.getTime())) {
-      alert('Invalid deadline date.');
+      alert('Invalid deadline.');
       return;
     }
     const deadlineTimestamp = Math.floor(deadlineDate.getTime() / 1000);
-
     if (deadlineTimestamp <= Math.floor(Date.now() / 1000)) {
-      alert('Deadline must be in the future.');
+      alert('Deadline must be future.');
       return;
     }
-
     try {
       const gasEstimate = await crowdfunding.methods
         .createProject(title, description, fundingGoalWei, deadlineTimestamp)
         .estimateGas({ from: account });
-
       await crowdfunding.methods
         .createProject(title, description, fundingGoalWei, deadlineTimestamp)
         .send({ from: account, gas: gasEstimate });
-
-      setProjectForm({
-        title: '',
-        description: '',
-        fundingGoalUSD: '',
-        deadline: '',
-      });
-      loadProjects(); // Reload projects after creation
+      setProjectForm({ title: '', description: '', fundingGoalUSD: '', deadline: '' });
+      loadProjects();
     } catch (error) {
       console.error('Error creating project:', error);
-      const revertReason =
-        error?.data?.message || error.message || 'Transaction reverted';
-      alert(`Error creating project: ${revertReason}`);
+      alert('Error creating project.');
     }
   };
 
-  // Handle withdrawing funds from a project
   const withdrawFunds = async (projectId) => {
-    if (!crowdfunding || !account) {
-      console.error('crowdfunding or account is not ready');
-      return;
-    }
+    if (!crowdfunding || !account) return;
     try {
       await crowdfunding.methods.withdrawFunds(projectId).send({ from: account });
-      loadProjects(); // Reload projects after withdrawal
+      loadProjects();
     } catch (error) {
       console.error('Error withdrawing funds:', error);
-      alert('Error withdrawing funds. See console for details.');
+      alert('Error withdrawing funds.');
     }
   };
 
-  // Listen to smart contract events to update UI in real-time
   useEffect(() => {
     if (crowdfunding) {
-      // ProjectCreated event
       crowdfunding.events.ProjectCreated({}, (error) => {
-        if (error) {
-          console.error('Error in ProjectCreated event listener:', error);
-        } else {
-          loadProjects();
-        }
+        if (!error) loadProjects();
       });
-
-      // Funded event
       crowdfunding.events.Funded({}, (error) => {
-        if (error) {
-          console.error('Error in Funded event listener:', error);
-        } else {
-          loadProjects();
-        }
+        if (!error) loadProjects();
       });
-
-      // FundsWithdrawn event
       crowdfunding.events.FundsWithdrawn({}, (error) => {
-        if (error) {
-          console.error('Error in FundsWithdrawn event listener:', error);
-        } else {
-          loadProjects();
-        }
+        if (!error) loadProjects();
       });
     }
   }, [crowdfunding]);
@@ -367,12 +294,10 @@ function App() {
         <Typography variant="h3" align="center" gutterBottom>
           Decentralized Crowdfunding Platform
         </Typography>
-        {/* Display user's name or account address */}
         <Typography variant="h5" align="center" gutterBottom>
           Your Account: {userName || account}
         </Typography>
 
-        {/* Show the "Set My Name" button only if the user hasn't set a name */}
         {userName === 'No name registered' && (
           <Box display="flex" justifyContent="center" marginBottom="1rem">
             <Button variant="outlined" onClick={handleSetName}>
@@ -382,7 +307,6 @@ function App() {
         )}
 
         <Grid container spacing={4}>
-          {/* Project Creation Form */}
           <Grid item xs={12} sm={6}>
             <Typography variant="h5" gutterBottom>
               Create a New Project
@@ -453,7 +377,6 @@ function App() {
             </form>
           </Grid>
 
-          {/* Display Available Projects */}
           <Grid item xs={12} sm={6}>
             <Typography variant="h5" gutterBottom>
               Available Projects
@@ -463,11 +386,7 @@ function App() {
                 <Card key={project.id} className={classes.projectCard}>
                   <CardContent>
                     <Typography variant="h6">{project.title}</Typography>
-                    <Typography
-                      variant="body2"
-                      color="textSecondary"
-                      gutterBottom
-                    >
+                    <Typography variant="body2" color="textSecondary" gutterBottom>
                       {project.description}
                     </Typography>
                     <Typography variant="body2">
@@ -476,18 +395,16 @@ function App() {
                     <Typography variant="body2">
                       <strong>Funding Goal:</strong>{' '}
                       {`$${(
-                        (parseFloat(web3.utils.fromWei(project.fundingGoal, 'ether')) *
-                          ETH_RATE_USD
-                        ).toFixed(2)
-                      )} USD`}
+                        parseFloat(web3.utils.fromWei(project.fundingGoal, 'ether')) *
+                        ETH_RATE_USD
+                      ).toFixed(2)} USD`}
                     </Typography>
                     <Typography variant="body2">
                       <strong>Total Funds:</strong>{' '}
                       {`$${(
-                        (parseFloat(web3.utils.fromWei(project.totalFunds, 'ether')) *
-                          ETH_RATE_USD
-                        ).toFixed(2)
-                      )} USD`}
+                        parseFloat(web3.utils.fromWei(project.totalFunds, 'ether')) *
+                        ETH_RATE_USD
+                      ).toFixed(2)} USD`}
                     </Typography>
                     <Typography variant="body2">
                       <strong>Deadline:</strong>{' '}
@@ -497,7 +414,7 @@ function App() {
                       {Number(project.deadline) * 1000 > Date.now()
                         ? `${Math.ceil(
                             (Number(project.deadline) * 1000 - Date.now()) /
-                              (1000 * 60 * 60 * 24)
+                            (1000 * 60 * 60 * 24)
                           )} days remaining`
                         : 'Deadline passed'}
                     </Typography>
@@ -510,7 +427,6 @@ function App() {
                       }
                       style={{ marginTop: '1rem' }}
                     />
-                    {/* Display Top Donors */}
                     {topDonors[project.id] && topDonors[project.id].length > 0 && (
                       <div className={classes.topDonors}>
                         <Typography variant="h6">Top Donors:</Typography>
@@ -525,10 +441,7 @@ function App() {
                               USD
                             </Typography>
                             {donor.comment && (
-                              <Typography
-                                variant="body2"
-                                className={classes.comment}
-                              >
+                              <Typography variant="body2" className={classes.comment}>
                                 "{donor.comment}"
                               </Typography>
                             )}
@@ -539,7 +452,6 @@ function App() {
                     <Typography variant="body2" color="textSecondary">
                       {project.isOpen ? 'Open for funding' : 'Funding closed'}
                     </Typography>
-                    {/* Fund Project Component */}
                     {project.isOpen && (
                       <FundProject
                         crowdfunding={crowdfunding}
@@ -549,7 +461,6 @@ function App() {
                         web3={web3}
                       />
                     )}
-                    {/* Withdraw Funds Button */}
                     {!project.isOpen &&
                       project.creator.toLowerCase() === account.toLowerCase() &&
                       parseFloat(web3.utils.fromWei(project.totalFunds, 'ether')) > 0 && (
@@ -562,6 +473,15 @@ function App() {
                           Withdraw Funds
                         </Button>
                       )}
+
+                    {/* Approve Withdrawal Button */}
+                    <ApproveWithdrawalButton
+                      project={project}
+                      account={account}
+                      multiSigApprover={multiSigApprover}
+                      refreshProjects={loadProjects}
+                      web3={web3}
+                    />
                   </CardContent>
                 </Card>
               ))
@@ -575,7 +495,6 @@ function App() {
   );
 }
 
-// FundProject Component
 function FundProject({ crowdfunding, project, account, refreshProjects, web3 }) {
   const classes = useStyles();
   const [amountUSD, setAmountUSD] = useState('');
@@ -587,11 +506,8 @@ function FundProject({ crowdfunding, project, account, refreshProjects, web3 }) 
       setError('Please enter a valid funding amount in USD.');
       return;
     }
-
-    // Convert USD to ETH using the fixed rate
     const ethValue = parseFloat(amountUSD) / ETH_RATE_USD;
     const ethValueWei = web3.utils.toWei(ethValue.toString(), 'ether');
-
     try {
       await crowdfunding.methods
         .fundProject(project.id, comment)
@@ -602,7 +518,7 @@ function FundProject({ crowdfunding, project, account, refreshProjects, web3 }) 
       refreshProjects();
     } catch (error) {
       console.error('Error funding project:', error);
-      alert('Error funding project. See console for details.');
+      alert('Error funding project. See console.');
     }
   };
 
@@ -646,6 +562,43 @@ function FundProject({ crowdfunding, project, account, refreshProjects, web3 }) 
       </Button>
     </Box>
   );
+}
+
+function ApproveWithdrawalButton({ project, account, multiSigApprover, refreshProjects, web3 }) {
+  const isTrustedSigner = TRUSTED_SIGNERS.some(s => s.toLowerCase() === account.toLowerCase());
+
+  const approve = async () => {
+    if (!multiSigApprover) {
+      alert('MultiSigApprover not set or not ready.');
+      return;
+    }
+    try {
+      await multiSigApprover.methods.approveWithdrawal(project.id).send({ from: account });
+      refreshProjects();
+      alert('Withdrawal approved!');
+    } catch (error) {
+      console.error('Error approving withdrawal:', error);
+      alert('Error approving withdrawal. Check console.');
+    }
+  };
+
+  const totalFundsEth = parseFloat(web3.utils.fromWei(project.totalFunds, 'ether'));
+
+  // Show the button if project is closed (fundingGoal reached), has funds, and you are a trusted signer
+  // The actual withdrawal will only succeed if all signers have approved.
+  if (!project.isOpen && totalFundsEth > 0 && isTrustedSigner) {
+    return (
+      <Box mt={2}>
+        <Typography variant="body2">
+          You are a trusted signer. Please approve withdrawal if you agree the creator can withdraw.
+        </Typography>
+        <Button variant="outlined" onClick={approve}>
+          Approve Withdrawal
+        </Button>
+      </Box>
+    );
+  }
+  return null;
 }
 
 export default App;
