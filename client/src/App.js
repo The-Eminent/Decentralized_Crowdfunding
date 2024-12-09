@@ -3,6 +3,7 @@ import Web3 from 'web3';
 import Crowdfunding from './contracts/Crowdfunding.json';
 import NameRegistryABI from './contracts/NameRegistry.json';
 import MultiSigApproverABI from './contracts/MultiSigApprover.json'; 
+import ReferralRewardsABI from './contracts/ReferralRewards.json'; 
 import config from './contracts/config.json';
 import {
   Container,
@@ -44,8 +45,8 @@ const ETH_RATE_USD = 4000;
 
 // Trusted signers array used when deploying MultiSigApprover
 const TRUSTED_SIGNERS = [
-  "0x1503a1347bFCD038BB750CCfEde703CD3ACd4B55",
-  "0x3D74170eD20891004646C2b4C174B93B3c5C7191"
+  "0x60B3Af227f03044949c0cB97B9B046A4a99dda03",
+  "0x0Fa02132dC5be4d14309EF12e678947d262A8525"
 ];
 
 function App() {
@@ -65,6 +66,18 @@ function App() {
   });
   const [multiSigApprover, setMultiSigApprover] = useState(null);
 
+  const [referralRewards, setReferralRewards] = useState(null); // For referral contract
+  const [refParam, setRefParam] = useState(null);
+  const [myReferralCount, setMyReferralCount] = useState(0);
+
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const refAddress = urlParams.get('ref');
+    if (refAddress) {
+      setRefParam(refAddress);
+    }
+  }, []);
+
   useEffect(() => {
     const init = async () => {
       if (window.ethereum) {
@@ -72,13 +85,6 @@ function App() {
           await window.ethereum.request({ method: 'eth_requestAccounts' });
           const web3Instance = new Web3(window.ethereum);
           setWeb3(web3Instance);
-
-          const networkId = await web3Instance.eth.net.getId();
-          const crowdfundingInstance = new web3Instance.eth.Contract(
-            Crowdfunding.abi,
-            config.crowdfunding
-          );
-          setCrowdfunding(crowdfundingInstance);
 
           const accounts = await web3Instance.eth.getAccounts();
           if (accounts.length === 0) {
@@ -96,13 +102,23 @@ function App() {
           const storedName = await nameRegistryInstance.methods.getName(accounts[0]).call();
           setUserName(storedName || 'No name registered');
 
-          if (config.multiSigApprover) {
-            const multiSigInstance = new web3Instance.eth.Contract(
-              MultiSigApproverABI.abi,
-              config.multiSigApprover
-            );
-            setMultiSigApprover(multiSigInstance);
-          }
+          const crowdfundingInstance = new web3Instance.eth.Contract(
+            Crowdfunding.abi,
+            config.crowdfunding
+          );
+          setCrowdfunding(crowdfundingInstance);
+
+          const multiSigInstance = new web3Instance.eth.Contract(
+            MultiSigApproverABI.abi,
+            config.multiSigApprover
+          );
+          setMultiSigApprover(multiSigInstance);
+
+          const referralInstance = new web3Instance.eth.Contract(
+            ReferralRewardsABI.abi,
+            config.referralRewards
+          );
+          setReferralRewards(referralInstance);
 
         } catch (error) {
           console.error('Error connecting to MetaMask:', error);
@@ -114,12 +130,6 @@ function App() {
     };
     init();
   }, []);
-
-  useEffect(() => {
-    if (crowdfunding && nameRegistry) {
-      loadProjects();
-    }
-  }, [crowdfunding, nameRegistry]);
 
   const loadProjects = async () => {
     try {
@@ -136,6 +146,12 @@ function App() {
       console.error('Error loading projects:', error);
     }
   };
+
+  useEffect(() => {
+    if (crowdfunding && nameRegistry) {
+      loadProjects();
+    }
+  }, [crowdfunding, nameRegistry]);
 
   useEffect(() => {
     const loadTopDonors = async (projectId) => {
@@ -163,7 +179,6 @@ function App() {
     }
   }, [projects, crowdfunding, nameRegistry]);
 
-  // Fetch approval status for each project
   useEffect(() => {
     const fetchApprovalStatus = async () => {
       if (!crowdfunding || !multiSigApprover) return;
@@ -176,7 +191,6 @@ function App() {
                 .call();
               const approvedCount = parseInt(result[0], 10);
               const requiredApprovals = parseInt(result[1], 10);
-  
               return {
                 ...project,
                 approvalStatus: {
@@ -195,12 +209,21 @@ function App() {
         console.error("Error fetching approval status:", error);
       }
     };
-  
+
     if (projects.length > 0 && multiSigApprover) {
       fetchApprovalStatus();
     }
   }, [projects, multiSigApprover, crowdfunding]);
-  
+
+  useEffect(() => {
+    const fetchMyReferralCount = async () => {
+      if (referralRewards && account) {
+        const count = await referralRewards.methods.getReferralCount(account).call();
+        setMyReferralCount(parseInt(count, 10));
+      }
+    };
+    fetchMyReferralCount();
+  }, [referralRewards, account]);
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
@@ -279,8 +302,8 @@ function App() {
       await crowdfunding.methods
         .createProject(title, description, fundingGoalWei, deadlineTimestamp)
         .send({ from: account, gas: gasEstimate });
+      await loadProjects(); // Await the reload
       setProjectForm({ title: '', description: '', fundingGoalUSD: '', deadline: '' });
-      loadProjects();
     } catch (error) {
       console.error('Error creating project:', error);
       alert('Error creating project.');
@@ -300,7 +323,7 @@ function App() {
       }
 
       await crowdfunding.methods.withdrawFunds(projectId).send({ from: account });
-      loadProjects();
+      await loadProjects(); // Await the reload
       alert('Funds withdrawn successfully!');
     } catch (error) {
       console.error('Error withdrawing funds:', error);
@@ -310,17 +333,19 @@ function App() {
 
   useEffect(() => {
     if (crowdfunding) {
-      crowdfunding.events.ProjectCreated({}, (error) => {
-        if (!error) loadProjects();
+      crowdfunding.events.ProjectCreated({}, async (error) => {
+        if (!error) await loadProjects();
       });
-      crowdfunding.events.Funded({}, (error) => {
-        if (!error) loadProjects();
+      crowdfunding.events.Funded({}, async (error) => {
+        if (!error) await loadProjects();
       });
-      crowdfunding.events.FundsWithdrawn({}, (error) => {
-        if (!error) loadProjects();
+      crowdfunding.events.FundsWithdrawn({}, async (error) => {
+        if (!error) await loadProjects();
       });
     }
   }, [crowdfunding]);
+
+  const myReferralLink = `http://localhost:3000/?ref=${account}`;
 
   return (
     <Container maxWidth="md">
@@ -337,6 +362,16 @@ function App() {
             <Button variant="outlined" onClick={handleSetName}>
               Set My Name
             </Button>
+          </Box>
+        )}
+
+        {account && referralRewards && (
+          <Box mb={2}>
+            <Typography variant="h6">Your Referral Link:</Typography>
+            <Typography variant="body2">{myReferralLink}</Typography>
+            <Typography variant="body2" style={{ marginTop: '0.5rem' }}>
+              You have referred {myReferralCount} contributors.
+            </Typography>
           </Box>
         )}
 
@@ -503,13 +538,17 @@ function App() {
                         account={account}
                         refreshProjects={loadProjects}
                         web3={web3}
+                        refParam={refParam}
+                        referralRewards={referralRewards}
                       />
                     )}
                     {!project.isOpen &&
                       project.creator.toLowerCase() === account.toLowerCase() &&
                       parseFloat(web3.utils.fromWei(project.totalFunds, 'ether')) > 0 && (
                         <Button
-                          onClick={() => withdrawFunds(project.id)}
+                          onClick={async () => {
+                            await withdrawFunds(project.id);
+                          }}
                           variant="contained"
                           color="secondary"
                           sx={{ mt: 2 }}
@@ -538,7 +577,7 @@ function App() {
   );
 }
 
-function FundProject({ crowdfunding, project, account, refreshProjects, web3 }) {
+function FundProject({ crowdfunding, project, account, refreshProjects, web3, refParam, referralRewards }) {
   const classes = useStyles();
   const [amountUSD, setAmountUSD] = useState('');
   const [comment, setComment] = useState('');
@@ -549,16 +588,32 @@ function FundProject({ crowdfunding, project, account, refreshProjects, web3 }) 
       setError('Please enter a valid funding amount in USD.');
       return;
     }
-    const ethValue = parseFloat(amountUSD) / ETH_RATE_USD;
+    const ethValue = parseFloat(amountUSD) / 4000;
     const ethValueWei = web3.utils.toWei(ethValue.toString(), 'ether');
     try {
+      const gasEstimate = await crowdfunding.methods
+        .fundProject(project.id, comment)
+        .estimateGas({ from: account, value: ethValueWei });
       await crowdfunding.methods
         .fundProject(project.id, comment)
-        .send({ from: account, value: ethValueWei });
+        .send({ from: account, value: ethValueWei, gas: gasEstimate });
+
       setAmountUSD('');
       setComment('');
       setError('');
-      refreshProjects();
+      await refreshProjects(); // Await here
+
+      // If referral is applicable
+      if (refParam && referralRewards && refParam.toLowerCase() !== account.toLowerCase()) {
+        try {
+          const gasEstimateRef = await referralRewards.methods.recordReferral(account, refParam).estimateGas({ from: account });
+          await referralRewards.methods.recordReferral(account, refParam).send({ from: account, gas: gasEstimateRef });
+          alert('Referral recorded!');
+        } catch (err) {
+          console.error('Error recording referral:', err);
+        }
+      }
+
     } catch (error) {
       console.error('Error funding project:', error);
       alert('Error funding project. See console.');
@@ -630,8 +685,9 @@ function ApproveWithdrawalButton({ project, account, multiSigApprover, refreshPr
       return;
     }
     try {
-      await multiSigApprover.methods.approveWithdrawal(project.id).send({ from: account });
-      refreshProjects();
+      const gasEstimate = await multiSigApprover.methods.approveWithdrawal(project.id).estimateGas({ from: account });
+      await multiSigApprover.methods.approveWithdrawal(project.id).send({ from: account, gas: gasEstimate });
+      await refreshProjects(); // Await the refresh
       alert('Withdrawal approved!');
       setAlreadyApproved(true);
     } catch (error) {

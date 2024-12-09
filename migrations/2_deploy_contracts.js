@@ -1,8 +1,9 @@
 const fs = require("fs");
-const path = require("path"); // Import path for resolving directories
+const path = require("path");
 const Crowdfunding = artifacts.require("Crowdfunding");
 const NameRegistry = artifacts.require("NameRegistry");
 const MultiSigApprover = artifacts.require("MultiSigApprover");
+const ReferralRewards = artifacts.require("ReferralRewards"); 
 
 module.exports = async function (deployer, network, accounts) {
   await deployer.deploy(NameRegistry);
@@ -12,8 +13,8 @@ module.exports = async function (deployer, network, accounts) {
   const crowdfundingInstance = await Crowdfunding.deployed();
 
   const trustedSigners = [
-    "0x1503a1347bFCD038BB750CCfEde703CD3ACd4B55",
-    "0x3D74170eD20891004646C2b4C174B93B3c5C7191",
+    "0x60B3Af227f03044949c0cB97B9B046A4a99dda03",
+    "0x0Fa02132dC5be4d14309EF12e678947d262A8525",
   ];
 
   const requiredApprovals = 2;
@@ -23,13 +24,17 @@ module.exports = async function (deployer, network, accounts) {
 
   await crowdfundingInstance.setMultiSigApprover(multiSigApproverInstance.address);
 
+  // Deploy ReferralRewards
+  await deployer.deploy(ReferralRewards);
+  const referralRewardsInstance = await ReferralRewards.deployed();
+
   const config = {
     nameRegistry: nameRegistryInstance.address,
     crowdfunding: crowdfundingInstance.address,
     multiSigApprover: multiSigApproverInstance.address,
+    referralRewards: referralRewardsInstance.address,
   };
 
-  // Save config to build/contracts folder
   const filePath = path.join(__dirname, "../build/contracts/config.json");
   fs.writeFileSync(filePath, JSON.stringify(config, null, 2));
   console.log("Configuration saved to:", filePath);
