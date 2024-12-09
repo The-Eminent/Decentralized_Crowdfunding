@@ -2,7 +2,8 @@ import React, { useEffect, useState } from 'react';
 import Web3 from 'web3';
 import Crowdfunding from './contracts/Crowdfunding.json';
 import NameRegistryABI from './contracts/NameRegistry.json';
-import MultiSigApproverABI from './contracts/MultiSigApprover.json'; // New contract ABI
+import MultiSigApproverABI from './contracts/MultiSigApprover.json'; 
+import config from './contracts/config.json';
 import {
   Container,
   Typography,
@@ -39,15 +40,12 @@ const useStyles = makeStyles({
 });
 
 // Fixed ETH rate for session
-const ETH_RATE_USD = 2000; 
-
-// Set your MultiSigApprover deployed address here:
-const MULTISIG_APPROVER_ADDRESS = "0x5c27148ffDDcEE987B2e230379D337e73deb5a7e";
+const ETH_RATE_USD = 4000; 
 
 // Trusted signers array used when deploying MultiSigApprover
 const TRUSTED_SIGNERS = [
-  "0x2D2504547d770Cac8F61DbBc71bA3E74d49D3F26",
-  "0xd33189d58ADe7bCA3a8F696cf761e74820DD2629"
+  "0x1503a1347bFCD038BB750CCfEde703CD3ACd4B55",
+  "0x3D74170eD20891004646C2b4C174B93B3c5C7191"
 ];
 
 function App() {
@@ -65,7 +63,6 @@ function App() {
     fundingGoalUSD: '',
     deadline: '',
   });
-
   const [multiSigApprover, setMultiSigApprover] = useState(null);
 
   useEffect(() => {
@@ -77,15 +74,9 @@ function App() {
           setWeb3(web3Instance);
 
           const networkId = await web3Instance.eth.net.getId();
-          const deployedNetwork = Crowdfunding.networks[networkId];
-          if (!deployedNetwork) {
-            alert('Crowdfunding contract not deployed on this network.');
-            return;
-          }
-
           const crowdfundingInstance = new web3Instance.eth.Contract(
             Crowdfunding.abi,
-            deployedNetwork.address
+            config.crowdfunding
           );
           setCrowdfunding(crowdfundingInstance);
 
@@ -96,25 +87,19 @@ function App() {
           }
           setAccount(accounts[0]);
 
-          const nameRegistryNetwork = NameRegistryABI.networks[networkId];
-          if (!nameRegistryNetwork) {
-            alert('NameRegistry not deployed on this network.');
-            return;
-          }
-
           const nameRegistryInstance = new web3Instance.eth.Contract(
             NameRegistryABI.abi,
-            nameRegistryNetwork.address
+            config.nameRegistry
           );
           setNameRegistry(nameRegistryInstance);
 
           const storedName = await nameRegistryInstance.methods.getName(accounts[0]).call();
           setUserName(storedName || 'No name registered');
 
-          if (MULTISIG_APPROVER_ADDRESS !== "0xYourDeployedMultiSigApproverAddressHere") {
+          if (config.multiSigApprover) {
             const multiSigInstance = new web3Instance.eth.Contract(
               MultiSigApproverABI.abi,
-              MULTISIG_APPROVER_ADDRESS
+              config.multiSigApprover
             );
             setMultiSigApprover(multiSigInstance);
           }
@@ -177,6 +162,45 @@ function App() {
       projects.forEach((p) => loadTopDonors(p.id));
     }
   }, [projects, crowdfunding, nameRegistry]);
+
+  // Fetch approval status for each project
+  useEffect(() => {
+    const fetchApprovalStatus = async () => {
+      if (!crowdfunding || !multiSigApprover) return;
+      try {
+        const updatedProjects = await Promise.all(
+          projects.map(async (project) => {
+            try {
+              const result = await crowdfunding.methods
+                .getApprovalStatus(project.id)
+                .call();
+              const approvedCount = parseInt(result[0], 10);
+              const requiredApprovals = parseInt(result[1], 10);
+  
+              return {
+                ...project,
+                approvalStatus: {
+                  approved: approvedCount,
+                  required: requiredApprovals
+                }
+              };
+            } catch (err) {
+              console.error("Error fetching approval status:", err);
+              return project;
+            }
+          })
+        );
+        setProjects(updatedProjects);
+      } catch (error) {
+        console.error("Error fetching approval status:", error);
+      }
+    };
+  
+    if (projects.length > 0 && multiSigApprover) {
+      fetchApprovalStatus();
+    }
+  }, [projects, multiSigApprover, crowdfunding]);
+  
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
@@ -266,8 +290,18 @@ function App() {
   const withdrawFunds = async (projectId) => {
     if (!crowdfunding || !account) return;
     try {
+      const result = await crowdfunding.methods.getApprovalStatus(projectId).call();
+      const approvedCount = result['0'];
+      const requiredApprovals = result['1'];
+
+      if (parseInt(approvedCount) < parseInt(requiredApprovals)) {
+        alert(`Withdrawal not allowed. Only ${approvedCount}/${requiredApprovals} approved.`);
+        return;
+      }
+
       await crowdfunding.methods.withdrawFunds(projectId).send({ from: account });
       loadProjects();
+      alert('Funds withdrawn successfully!');
     } catch (error) {
       console.error('Error withdrawing funds:', error);
       alert('Error withdrawing funds.');
@@ -452,6 +486,16 @@ function App() {
                     <Typography variant="body2" color="textSecondary">
                       {project.isOpen ? 'Open for funding' : 'Funding closed'}
                     </Typography>
+
+                    {/* Show Approval Status if closed and multiSigApprover set */}
+                    {!project.isOpen && multiSigApprover && project.approvalStatus && (
+                      <Box mt={2}>
+                        <Typography variant="body2">
+                          Approval Status: {project.approvalStatus.approved}/{project.approvalStatus.required}
+                        </Typography>
+                      </Box>
+                    )}
+
                     {project.isOpen && (
                       <FundProject
                         crowdfunding={crowdfunding}
@@ -474,7 +518,6 @@ function App() {
                         </Button>
                       )}
 
-                    {/* Approve Withdrawal Button */}
                     <ApproveWithdrawalButton
                       project={project}
                       account={account}
@@ -566,6 +609,20 @@ function FundProject({ crowdfunding, project, account, refreshProjects, web3 }) 
 
 function ApproveWithdrawalButton({ project, account, multiSigApprover, refreshProjects, web3 }) {
   const isTrustedSigner = TRUSTED_SIGNERS.some(s => s.toLowerCase() === account.toLowerCase());
+  const [alreadyApproved, setAlreadyApproved] = useState(false);
+
+  useEffect(() => {
+    const checkApproval = async () => {
+      if (!multiSigApprover || !isTrustedSigner) return;
+      try {
+        const didApprove = await multiSigApprover.methods.approvals(project.id, account).call();
+        setAlreadyApproved(didApprove);
+      } catch (error) {
+        console.error("Error checking approval:", error);
+      }
+    };
+    checkApproval();
+  }, [multiSigApprover, isTrustedSigner, project.id, account]);
 
   const approve = async () => {
     if (!multiSigApprover) {
@@ -576,6 +633,7 @@ function ApproveWithdrawalButton({ project, account, multiSigApprover, refreshPr
       await multiSigApprover.methods.approveWithdrawal(project.id).send({ from: account });
       refreshProjects();
       alert('Withdrawal approved!');
+      setAlreadyApproved(true);
     } catch (error) {
       console.error('Error approving withdrawal:', error);
       alert('Error approving withdrawal. Check console.');
@@ -584,17 +642,23 @@ function ApproveWithdrawalButton({ project, account, multiSigApprover, refreshPr
 
   const totalFundsEth = parseFloat(web3.utils.fromWei(project.totalFunds, 'ether'));
 
-  // Show the button if project is closed (fundingGoal reached), has funds, and you are a trusted signer
-  // The actual withdrawal will only succeed if all signers have approved.
   if (!project.isOpen && totalFundsEth > 0 && isTrustedSigner) {
     return (
       <Box mt={2}>
-        <Typography variant="body2">
-          You are a trusted signer. Please approve withdrawal if you agree the creator can withdraw.
-        </Typography>
-        <Button variant="outlined" onClick={approve}>
-          Approve Withdrawal
-        </Button>
+        {!alreadyApproved ? (
+          <>
+            <Typography variant="body2">
+              You are a trusted signer. Please approve withdrawal if you agree the creator can withdraw.
+            </Typography>
+            <Button variant="outlined" onClick={approve}>
+              Approve Withdrawal
+            </Button>
+          </>
+        ) : (
+          <Typography variant="body2" style={{ fontWeight: 'bold' }}>
+            You have already approved this withdrawal.
+          </Typography>
+        )}
       </Box>
     );
   }

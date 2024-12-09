@@ -3,6 +3,9 @@ pragma solidity ^0.8.0;
 
 interface IMultiSigApprover {
     function isApproved(uint256 projectId) external view returns (bool);
+    function approveWithdrawal(uint256 projectId) external;
+    function getApprovals(uint256 projectId) external view returns (uint256);
+    function requiredApprovals() external view returns (uint256);
 }
 
 contract Crowdfunding {
@@ -10,23 +13,23 @@ contract Crowdfunding {
         uint256 id;
         string title;
         string description;
-        uint256 fundingGoal; // In Wei
-        uint256 totalFunds;  // In Wei
+        uint256 fundingGoal; 
+        uint256 totalFunds;  
         address payable creator;
         bool isOpen;
-        uint256 deadline; // Timestamp
+        uint256 deadline;
     }
 
     struct Donation {
         address contributor;
-        uint256 amount;   // In Wei
+        uint256 amount;   
         string comment;
     }
 
     uint256 public projectCount = 0;
     mapping(uint256 => Project) public projects;
-    mapping(uint256 => Donation[]) public donations; // projectId => Donation[]
-    mapping(uint256 => mapping(address => uint256)) public contributions; // projectId => contributor => amount
+    mapping(uint256 => Donation[]) public donations; 
+    mapping(uint256 => mapping(address => uint256)) public contributions;
 
     event ProjectCreated(
         uint256 id,
@@ -48,7 +51,6 @@ contract Crowdfunding {
     IMultiSigApprover public multiSigApprover;
 
     function setMultiSigApprover(address _approver) public {
-        // For simplicity, anyone can set it once; in production, restrict this to contract owner
         require(address(multiSigApprover) == address(0), "Already set");
         multiSigApprover = IMultiSigApprover(_approver);
     }
@@ -56,8 +58,8 @@ contract Crowdfunding {
     function createProject(
         string memory _title,
         string memory _description,
-        uint256 _fundingGoal, // In Wei
-        uint256 _deadline      // Timestamp
+        uint256 _fundingGoal,
+        uint256 _deadline
     ) public {
         require(bytes(_title).length > 0, "Title is required");
         require(bytes(_description).length > 0, "Description is required");
@@ -76,13 +78,7 @@ contract Crowdfunding {
             _deadline
         );
 
-        emit ProjectCreated(
-            projectCount,
-            msg.sender,
-            _title,
-            _fundingGoal,
-            _deadline
-        );
+        emit ProjectCreated(projectCount, msg.sender, _title, _fundingGoal, _deadline);
     }
 
     function fundProject(uint256 _id, string memory _comment) public payable {
@@ -98,7 +94,6 @@ contract Crowdfunding {
 
         emit Funded(_id, msg.sender, msg.value, _comment);
 
-        // Close project if funding goal is reached
         if (project.totalFunds >= project.fundingGoal) {
             project.isOpen = false;
         }
@@ -114,7 +109,6 @@ contract Crowdfunding {
 
         uint256 amount = project.totalFunds;
         project.totalFunds = 0;
-        // project.isOpen = false; // Already closed when goal reached
         project.creator.transfer(amount);
 
         emit FundsWithdrawn(_id, amount);
@@ -122,5 +116,12 @@ contract Crowdfunding {
 
     function getDonations(uint256 _id) public view returns (Donation[] memory) {
         return donations[_id];
+    }
+
+    function getApprovalStatus(uint256 _projectId) public view returns (uint256 approvedCount, uint256 requiredApprovals) {
+        require(address(multiSigApprover) != address(0), "MultiSigApprover not set.");
+        uint256 app = multiSigApprover.getApprovals(_projectId);
+        uint256 req = multiSigApprover.requiredApprovals();
+        return (app, req);
     }
 }

@@ -18,12 +18,7 @@ contract MultiSigApprover {
     }
 
     function isApproved(uint256 projectId) public view returns (bool) {
-        uint256 count = 0;
-        for (uint256 i = 0; i < trustedSigners.length; i++) {
-            if (approvals[projectId][trustedSigners[i]]) {
-                count++;
-            }
-        }
+        uint256 count = getApprovals(projectId);
         return count >= requiredApprovals;
     }
 
@@ -34,5 +29,15 @@ contract MultiSigApprover {
             }
         }
         return false;
+    }
+
+    function getApprovals(uint256 projectId) public view returns (uint256) {
+        uint256 count = 0;
+        for (uint256 i = 0; i < trustedSigners.length; i++) {
+            if (approvals[projectId][trustedSigners[i]]) {
+                count++;
+            }
+        }
+        return count;
     }
 }
