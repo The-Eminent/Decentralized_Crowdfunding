@@ -66,9 +66,10 @@ function App() {
   });
   const [multiSigApprover, setMultiSigApprover] = useState(null);
 
-  const [referralRewards, setReferralRewards] = useState(null); // For referral contract
-  const [refParam, setRefParam] = useState(null);
-  const [myReferralCount, setMyReferralCount] = useState(0);
+  const [referralRewards, setReferralRewards] = useState(null); 
+  const [refParam, setRefParam] = useState(null); 
+  const [myReferralCount, setMyReferralCount] = useState(0); 
+  const [myReferralPoints, setMyReferralPoints] = useState(0); // track points
 
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
@@ -216,13 +217,16 @@ function App() {
   }, [projects, multiSigApprover, crowdfunding]);
 
   useEffect(() => {
-    const fetchMyReferralCount = async () => {
+    const fetchReferralData = async () => {
       if (referralRewards && account) {
         const count = await referralRewards.methods.getReferralCount(account).call();
         setMyReferralCount(parseInt(count, 10));
+
+        const points = await referralRewards.methods.getReferralPoints(account).call();
+        setMyReferralPoints(parseInt(points, 10));
       }
     };
-    fetchMyReferralCount();
+    fetchReferralData();
   }, [referralRewards, account]);
 
   const handleInputChange = (e) => {
@@ -302,7 +306,7 @@ function App() {
       await crowdfunding.methods
         .createProject(title, description, fundingGoalWei, deadlineTimestamp)
         .send({ from: account, gas: gasEstimate });
-      await loadProjects(); // Await the reload
+      await loadProjects();
       setProjectForm({ title: '', description: '', fundingGoalUSD: '', deadline: '' });
     } catch (error) {
       console.error('Error creating project:', error);
@@ -323,11 +327,25 @@ function App() {
       }
 
       await crowdfunding.methods.withdrawFunds(projectId).send({ from: account });
-      await loadProjects(); // Await the reload
+      await loadProjects();
       alert('Funds withdrawn successfully!');
     } catch (error) {
       console.error('Error withdrawing funds:', error);
       alert('Error withdrawing funds.');
+    }
+  };
+
+  // Claim referral rewards
+  const claimRewards = async () => {
+    if (!referralRewards || !account) return;
+    try {
+      await referralRewards.methods.claimRewards().send({ from: account });
+      alert('Rewards claimed!');
+      const points = await referralRewards.methods.getReferralPoints(account).call();
+      setMyReferralPoints(parseInt(points, 10));
+    } catch (err) {
+      console.error('Error claiming rewards:', err);
+      alert('Error claiming rewards.');
     }
   };
 
@@ -372,6 +390,14 @@ function App() {
             <Typography variant="body2" style={{ marginTop: '0.5rem' }}>
               You have referred {myReferralCount} contributors.
             </Typography>
+            <Typography variant="body2" style={{ marginTop: '0.5rem' }}>
+              Your Referral Points: {myReferralPoints}
+            </Typography>
+            {myReferralPoints > 0 && (
+              <Button variant="outlined" onClick={claimRewards} style={{ marginTop: '0.5rem' }}>
+                Claim Reward
+              </Button>
+            )}
           </Box>
         )}
 
@@ -601,7 +627,7 @@ function FundProject({ crowdfunding, project, account, refreshProjects, web3, re
       setAmountUSD('');
       setComment('');
       setError('');
-      await refreshProjects(); // Await here
+      await refreshProjects();
 
       // If referral is applicable
       if (refParam && referralRewards && refParam.toLowerCase() !== account.toLowerCase()) {
@@ -687,7 +713,7 @@ function ApproveWithdrawalButton({ project, account, multiSigApprover, refreshPr
     try {
       const gasEstimate = await multiSigApprover.methods.approveWithdrawal(project.id).estimateGas({ from: account });
       await multiSigApprover.methods.approveWithdrawal(project.id).send({ from: account, gas: gasEstimate });
-      await refreshProjects(); // Await the refresh
+      await refreshProjects();
       alert('Withdrawal approved!');
       setAlreadyApproved(true);
     } catch (error) {
