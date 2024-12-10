@@ -2,8 +2,8 @@ import React, { useEffect, useState } from 'react';
 import Web3 from 'web3';
 import Crowdfunding from './contracts/Crowdfunding.json';
 import NameRegistryABI from './contracts/NameRegistry.json';
-import MultiSigApproverABI from './contracts/MultiSigApprover.json'; 
-import ReferralRewardsABI from './contracts/ReferralRewards.json'; 
+import MultiSigApproverABI from './contracts/MultiSigApprover.json';
+import ReferralRewardsABI from './contracts/ReferralRewards.json';
 import config from './contracts/config.json';
 import {
   Container,
@@ -40,13 +40,10 @@ const useStyles = makeStyles({
   },
 });
 
-// Fixed ETH rate for session
 const ETH_RATE_USD = 4000; 
-
-// Trusted signers array used when deploying MultiSigApprover
 const TRUSTED_SIGNERS = [
-  "0x60B3Af227f03044949c0cB97B9B046A4a99dda03",
-  "0x0Fa02132dC5be4d14309EF12e678947d262A8525"
+  "0x116470dA168103C7329bB1c646b1Aca6308A8a83",
+  "0x4efba98Ba5620891eb4Ea7dB04904DeeD2F760b6"
 ];
 
 function App() {
@@ -69,7 +66,7 @@ function App() {
   const [referralRewards, setReferralRewards] = useState(null); 
   const [refParam, setRefParam] = useState(null); 
   const [myReferralCount, setMyReferralCount] = useState(0); 
-  const [myReferralPoints, setMyReferralPoints] = useState(0); // track points
+  const [myReferralPoints, setMyReferralPoints] = useState(0);
 
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
@@ -78,6 +75,16 @@ function App() {
       setRefParam(refAddress);
     }
   }, []);
+
+  const refreshProjects = async () => {
+    if (crowdfunding && nameRegistry) {
+      await loadProjects();
+    }
+    // Also update referral data after potential changes
+    if (referralRewards && account) {
+      await fetchReferralData();
+    }
+  };
 
   useEffect(() => {
     const init = async () => {
@@ -148,6 +155,16 @@ function App() {
     }
   };
 
+  const fetchReferralData = async () => {
+    if (referralRewards && account) {
+      const count = await referralRewards.methods.getReferralCount(account).call();
+      setMyReferralCount(parseInt(count, 10));
+
+      const points = await referralRewards.methods.getReferralPoints(account).call();
+      setMyReferralPoints(parseInt(points, 10));
+    }
+  };
+
   useEffect(() => {
     if (crowdfunding && nameRegistry) {
       loadProjects();
@@ -181,51 +198,6 @@ function App() {
   }, [projects, crowdfunding, nameRegistry]);
 
   useEffect(() => {
-    const fetchApprovalStatus = async () => {
-      if (!crowdfunding || !multiSigApprover) return;
-      try {
-        const updatedProjects = await Promise.all(
-          projects.map(async (project) => {
-            try {
-              const result = await crowdfunding.methods
-                .getApprovalStatus(project.id)
-                .call();
-              const approvedCount = parseInt(result[0], 10);
-              const requiredApprovals = parseInt(result[1], 10);
-              return {
-                ...project,
-                approvalStatus: {
-                  approved: approvedCount,
-                  required: requiredApprovals
-                }
-              };
-            } catch (err) {
-              console.error("Error fetching approval status:", err);
-              return project;
-            }
-          })
-        );
-        setProjects(updatedProjects);
-      } catch (error) {
-        console.error("Error fetching approval status:", error);
-      }
-    };
-
-    if (projects.length > 0 && multiSigApprover) {
-      fetchApprovalStatus();
-    }
-  }, [projects, multiSigApprover, crowdfunding]);
-
-  useEffect(() => {
-    const fetchReferralData = async () => {
-      if (referralRewards && account) {
-        const count = await referralRewards.methods.getReferralCount(account).call();
-        setMyReferralCount(parseInt(count, 10));
-
-        const points = await referralRewards.methods.getReferralPoints(account).call();
-        setMyReferralPoints(parseInt(points, 10));
-      }
-    };
     fetchReferralData();
   }, [referralRewards, account]);
 
@@ -247,10 +219,7 @@ function App() {
   };
 
   const handleSetName = async () => {
-    if (!nameRegistry || !account) {
-      console.error('nameRegistry or account not ready');
-      return;
-    }
+    if (!nameRegistry || !account) return;
     if (userName === 'No name registered') {
       const name = prompt('Enter your name:');
       if (name) {
@@ -261,6 +230,8 @@ function App() {
         try {
           await nameRegistry.methods.registerName(name).send({ from: account });
           setUserName(name);
+          await new Promise(res => setTimeout(res, 500));
+          await refreshProjects();
         } catch (err) {
           console.error('Error registering name:', err);
           alert('Failed to register name.');
@@ -306,7 +277,8 @@ function App() {
       await crowdfunding.methods
         .createProject(title, description, fundingGoalWei, deadlineTimestamp)
         .send({ from: account, gas: gasEstimate });
-      await loadProjects();
+      await new Promise(res => setTimeout(res, 500));
+      await refreshProjects();
       setProjectForm({ title: '', description: '', fundingGoalUSD: '', deadline: '' });
     } catch (error) {
       console.error('Error creating project:', error);
@@ -314,35 +286,13 @@ function App() {
     }
   };
 
-  const withdrawFunds = async (projectId) => {
-    if (!crowdfunding || !account) return;
-    try {
-      const result = await crowdfunding.methods.getApprovalStatus(projectId).call();
-      const approvedCount = result['0'];
-      const requiredApprovals = result['1'];
-
-      if (parseInt(approvedCount) < parseInt(requiredApprovals)) {
-        alert(`Withdrawal not allowed. Only ${approvedCount}/${requiredApprovals} approved.`);
-        return;
-      }
-
-      await crowdfunding.methods.withdrawFunds(projectId).send({ from: account });
-      await loadProjects();
-      alert('Funds withdrawn successfully!');
-    } catch (error) {
-      console.error('Error withdrawing funds:', error);
-      alert('Error withdrawing funds.');
-    }
-  };
-
-  // Claim referral rewards
   const claimRewards = async () => {
     if (!referralRewards || !account) return;
     try {
       await referralRewards.methods.claimRewards().send({ from: account });
       alert('Rewards claimed!');
-      const points = await referralRewards.methods.getReferralPoints(account).call();
-      setMyReferralPoints(parseInt(points, 10));
+      await new Promise(res => setTimeout(res, 500));
+      await refreshProjects();
     } catch (err) {
       console.error('Error claiming rewards:', err);
       alert('Error claiming rewards.');
@@ -352,13 +302,22 @@ function App() {
   useEffect(() => {
     if (crowdfunding) {
       crowdfunding.events.ProjectCreated({}, async (error) => {
-        if (!error) await loadProjects();
+        if (!error) {
+          await new Promise(res => setTimeout(res, 500));
+          await refreshProjects();
+        }
       });
       crowdfunding.events.Funded({}, async (error) => {
-        if (!error) await loadProjects();
+        if (!error) {
+          await new Promise(res => setTimeout(res, 500));
+          await refreshProjects();
+        }
       });
       crowdfunding.events.FundsWithdrawn({}, async (error) => {
-        if (!error) await loadProjects();
+        if (!error) {
+          await new Promise(res => setTimeout(res, 500));
+          await refreshProjects();
+        }
       });
     }
   }, [crowdfunding]);
@@ -478,120 +437,18 @@ function App() {
             </Typography>
             {projects.length > 0 ? (
               projects.map((project) => (
-                <Card key={project.id} className={classes.projectCard}>
-                  <CardContent>
-                    <Typography variant="h6">{project.title}</Typography>
-                    <Typography variant="body2" color="textSecondary" gutterBottom>
-                      {project.description}
-                    </Typography>
-                    <Typography variant="body2">
-                      <strong>Creator:</strong> {project.creatorName}
-                    </Typography>
-                    <Typography variant="body2">
-                      <strong>Funding Goal:</strong>{' '}
-                      {`$${(
-                        parseFloat(web3.utils.fromWei(project.fundingGoal, 'ether')) *
-                        ETH_RATE_USD
-                      ).toFixed(2)} USD`}
-                    </Typography>
-                    <Typography variant="body2">
-                      <strong>Total Funds:</strong>{' '}
-                      {`$${(
-                        parseFloat(web3.utils.fromWei(project.totalFunds, 'ether')) *
-                        ETH_RATE_USD
-                      ).toFixed(2)} USD`}
-                    </Typography>
-                    <Typography variant="body2">
-                      <strong>Deadline:</strong>{' '}
-                      {new Date(Number(project.deadline) * 1000).toLocaleDateString()}
-                    </Typography>
-                    <Typography variant="body2" color="error">
-                      {Number(project.deadline) * 1000 > Date.now()
-                        ? `${Math.ceil(
-                            (Number(project.deadline) * 1000 - Date.now()) /
-                            (1000 * 60 * 60 * 24)
-                          )} days remaining`
-                        : 'Deadline passed'}
-                    </Typography>
-                    <LinearProgress
-                      variant="determinate"
-                      value={
-                        (parseFloat(web3.utils.fromWei(project.totalFunds, 'ether')) /
-                          parseFloat(web3.utils.fromWei(project.fundingGoal, 'ether'))) *
-                        100
-                      }
-                      style={{ marginTop: '1rem' }}
-                    />
-                    {topDonors[project.id] && topDonors[project.id].length > 0 && (
-                      <div className={classes.topDonors}>
-                        <Typography variant="h6">Top Donors:</Typography>
-                        {topDonors[project.id].map((donor, index) => (
-                          <Box key={index} mb={1}>
-                            <Typography variant="body2">
-                              {donor.name || donor.contributor}: $
-                              {(
-                                parseFloat(web3.utils.fromWei(donor.amount, 'ether')) *
-                                ETH_RATE_USD
-                              ).toFixed(2)}{' '}
-                              USD
-                            </Typography>
-                            {donor.comment && (
-                              <Typography variant="body2" className={classes.comment}>
-                                "{donor.comment}"
-                              </Typography>
-                            )}
-                          </Box>
-                        ))}
-                      </div>
-                    )}
-                    <Typography variant="body2" color="textSecondary">
-                      {project.isOpen ? 'Open for funding' : 'Funding closed'}
-                    </Typography>
-
-                    {/* Show Approval Status if closed and multiSigApprover set */}
-                    {!project.isOpen && multiSigApprover && project.approvalStatus && (
-                      <Box mt={2}>
-                        <Typography variant="body2">
-                          Approval Status: {project.approvalStatus.approved}/{project.approvalStatus.required}
-                        </Typography>
-                      </Box>
-                    )}
-
-                    {project.isOpen && (
-                      <FundProject
-                        crowdfunding={crowdfunding}
-                        project={project}
-                        account={account}
-                        refreshProjects={loadProjects}
-                        web3={web3}
-                        refParam={refParam}
-                        referralRewards={referralRewards}
-                      />
-                    )}
-                    {!project.isOpen &&
-                      project.creator.toLowerCase() === account.toLowerCase() &&
-                      parseFloat(web3.utils.fromWei(project.totalFunds, 'ether')) > 0 && (
-                        <Button
-                          onClick={async () => {
-                            await withdrawFunds(project.id);
-                          }}
-                          variant="contained"
-                          color="secondary"
-                          sx={{ mt: 2 }}
-                        >
-                          Withdraw Funds
-                        </Button>
-                      )}
-
-                    <ApproveWithdrawalButton
-                      project={project}
-                      account={account}
-                      multiSigApprover={multiSigApprover}
-                      refreshProjects={loadProjects}
-                      web3={web3}
-                    />
-                  </CardContent>
-                </Card>
+                <ProjectCard
+                  key={project.id}
+                  project={project}
+                  account={account}
+                  web3={web3}
+                  multiSigApprover={multiSigApprover}
+                  crowdfunding={crowdfunding}
+                  topDonors={topDonors[project.id]}
+                  refreshProjects={refreshProjects}
+                  refParam={refParam}
+                  referralRewards={referralRewards}
+                />
               ))
             ) : (
               <Typography variant="body1">No projects available.</Typography>
@@ -603,8 +460,194 @@ function App() {
   );
 }
 
+function ProjectCard({ project, account, web3, multiSigApprover, crowdfunding, topDonors, refreshProjects, refParam, referralRewards }) {
+  const ETH_RATE_USD = 4000;
+  const isTrustedSigner = TRUSTED_SIGNERS.some(s => s.toLowerCase() === account.toLowerCase());
+  const isCreator = project.creator.toLowerCase() === account.toLowerCase();
+
+  const fundingGoalETH = parseFloat(web3.utils.fromWei(project.fundingGoal, 'ether'));
+  const totalFundsETH = parseFloat(web3.utils.fromWei(project.totalFunds, 'ether'));
+  const milestonesClaimed = parseInt(project.milestonesClaimed);
+
+  const g1 = fundingGoalETH / 3;
+  const g2 = fundingGoalETH / 3;
+  const g3 = fundingGoalETH - g1 - g2;
+
+  let unlocked = 0;
+  if (totalFundsETH >= g1) unlocked = 1;
+  if (totalFundsETH >= g1+g2) unlocked = 2;
+  if (totalFundsETH >= fundingGoalETH) unlocked = 3;
+
+  const incrementsToWithdraw = (unlocked > milestonesClaimed) ? (unlocked - milestonesClaimed) : 0;
+
+  const [alreadyApproved, setAlreadyApproved] = useState(false);
+  const [allApproved, setAllApproved] = useState(false);
+
+  useEffect(() => {
+    const checkApprovals = async () => {
+      if (!multiSigApprover || incrementsToWithdraw === 0) return;
+      let globalApproved = true;
+      let signerApprovedForAll = true;
+      for (let m = milestonesClaimed; m < milestonesClaimed+incrementsToWithdraw; m++) {
+        const milestoneIndex = m;
+        const approved = await multiSigApprover.methods.isApprovedForMilestone(project.id, milestoneIndex).call();
+        if (!approved) globalApproved = false;
+
+        if (isTrustedSigner) {
+          const signerApproved = await multiSigApprover.methods.milestoneApprovals(project.id, milestoneIndex, account).call();
+          if (!signerApproved) signerApprovedForAll = false;
+        }
+      }
+
+      setAllApproved(globalApproved);
+      if (isTrustedSigner) {
+        if (!globalApproved && !alreadyApproved) {
+          if (signerApprovedForAll) setAlreadyApproved(true);
+          else setAlreadyApproved(false);
+        }
+
+        if (globalApproved && isTrustedSigner) {
+          let signerFullyApproved = true;
+          for (let m = milestonesClaimed; m < milestonesClaimed+incrementsToWithdraw; m++) {
+            const signerApproved = await multiSigApprover.methods.milestoneApprovals(project.id, m, account).call();
+            if (!signerApproved) signerFullyApproved = false;
+          }
+          if (signerFullyApproved) setAlreadyApproved(true);
+        }
+      }
+    };
+    checkApprovals();
+  }, [multiSigApprover, incrementsToWithdraw, project.id, milestonesClaimed, isTrustedSigner, account, alreadyApproved]);
+
+  const approveMilestone = async () => {
+    if (!multiSigApprover) return;
+    try {
+      for (let m = milestonesClaimed; m < milestonesClaimed+incrementsToWithdraw; m++) {
+        const gasEstimate = await multiSigApprover.methods.approveWithdrawalForMilestone(project.id, m).estimateGas({ from: account });
+        await multiSigApprover.methods.approveWithdrawalForMilestone(project.id, m).send({ from: account, gas: gasEstimate });
+      }
+      alert('Milestone(s) approved!');
+      setAlreadyApproved(true);
+      await new Promise(res => setTimeout(res, 500));
+      await refreshProjects();
+    } catch (error) {
+      console.error('Error approving milestone:', error);
+      alert('Error approving milestone. Check console.');
+    }
+  };
+
+  const withdrawMilestoneFunds = async () => {
+    try {
+      const gasEstimate = await crowdfunding.methods.withdrawFunds(project.id).estimateGas({ from: account });
+      await crowdfunding.methods.withdrawFunds(project.id).send({ from: account, gas: gasEstimate });
+      alert('Milestone funds withdrawn successfully!');
+      await new Promise(res => setTimeout(res, 500));
+      await refreshProjects();
+    } catch (error) {
+      console.error('Error withdrawing milestone funds:', error);
+      alert('Error withdrawing milestone funds. See console.');
+    }
+  };
+
+  return (
+    <Card style={{ marginBottom: '1rem', backgroundColor: '#f5f5f5' }}>
+      <CardContent>
+        <Typography variant="h6">{project.title}</Typography>
+        <Typography variant="body2" color="textSecondary" gutterBottom>
+          {project.description}
+        </Typography>
+        <Typography variant="body2">
+          <strong>Creator:</strong> {project.creatorName}
+        </Typography>
+        <Typography variant="body2">
+          <strong>Funding Goal:</strong>{' '}
+          {`$${(fundingGoalETH * ETH_RATE_USD).toFixed(2)} USD`}
+        </Typography>
+        <Typography variant="body2">
+          <strong>Total Funds:</strong>{' '}
+          {`$${(totalFundsETH * ETH_RATE_USD).toFixed(2)} USD`}
+        </Typography>
+        <Typography variant="body2">
+          <strong>Deadline:</strong>{' '}
+          {new Date(Number(project.deadline) * 1000).toLocaleDateString()}
+        </Typography>
+        <Typography variant="body2" color="error">
+          {Number(project.deadline) * 1000 > Date.now()
+            ? `${Math.ceil((Number(project.deadline) * 1000 - Date.now()) / (1000 * 60 * 60 * 24))} days remaining`
+            : 'Deadline passed'}
+        </Typography>
+        <LinearProgress
+          variant="determinate"
+          value={(totalFundsETH / fundingGoalETH) * 100}
+          style={{ marginTop: '1rem' }}
+        />
+        {topDonors && topDonors.length > 0 && (
+          <div style={{ marginTop: '1rem' }}>
+            <Typography variant="h6">Top Donors:</Typography>
+            {topDonors.map((donor, index) => (
+              <Box key={index} mb={1}>
+                <Typography variant="body2">
+                  {donor.name || donor.contributor}: $
+                  {(parseFloat(web3.utils.fromWei(donor.amount, 'ether')) * ETH_RATE_USD).toFixed(2)} USD
+                </Typography>
+                {donor.comment && (
+                  <Typography variant="body2" style={{ fontStyle: 'italic', color: '#555' }}>
+                    "{donor.comment}"
+                  </Typography>
+                )}
+              </Box>
+            ))}
+          </div>
+        )}
+
+        <Typography variant="body2" color="textSecondary">
+          {project.isOpen ? 'Open for funding' : 'Funding closed'}
+        </Typography>
+
+        {project.isOpen && (
+          <FundProject
+            crowdfunding={crowdfunding}
+            project={project}
+            account={account}
+            refreshProjects={refreshProjects}
+            web3={web3}
+            refParam={refParam}
+            referralRewards={referralRewards}
+          />
+        )}
+
+        {(incrementsToWithdraw > 0 && (isTrustedSigner || isCreator)) && (
+          <Box mt={2}>
+            <Typography variant="body2">
+              {incrementsToWithdraw} increment(s) of funding are available to withdraw.
+            </Typography>
+
+            {!allApproved && isTrustedSigner && !alreadyApproved && (
+              <Button variant="outlined" onClick={approveMilestone} style={{ marginTop: '0.5rem' }}>
+                Approve Withdrawal
+              </Button>
+            )}
+
+            {!allApproved && isTrustedSigner && alreadyApproved && (
+              <Typography variant="body2" style={{ fontWeight: 'bold', marginTop: '0.5rem' }}>
+                You have already approved this withdrawal.
+              </Typography>
+            )}
+
+            {allApproved && isCreator && (
+              <Button variant="contained" color="secondary" onClick={withdrawMilestoneFunds} style={{ marginTop: '0.5rem' }}>
+                Withdraw Now
+              </Button>
+            )}
+          </Box>
+        )}
+
+      </CardContent>
+    </Card>
+  );
+}
+
 function FundProject({ crowdfunding, project, account, refreshProjects, web3, refParam, referralRewards }) {
-  const classes = useStyles();
   const [amountUSD, setAmountUSD] = useState('');
   const [comment, setComment] = useState('');
   const [error, setError] = useState('');
@@ -627,14 +670,17 @@ function FundProject({ crowdfunding, project, account, refreshProjects, web3, re
       setAmountUSD('');
       setComment('');
       setError('');
+      await new Promise(res => setTimeout(res, 500));
       await refreshProjects();
 
-      // If referral is applicable
+      // Record referral if applicable
       if (refParam && referralRewards && refParam.toLowerCase() !== account.toLowerCase()) {
         try {
           const gasEstimateRef = await referralRewards.methods.recordReferral(account, refParam).estimateGas({ from: account });
           await referralRewards.methods.recordReferral(account, refParam).send({ from: account, gas: gasEstimateRef });
           alert('Referral recorded!');
+          await new Promise(res => setTimeout(res, 500));
+          // Optionally refresh referral data after referral recorded
         } catch (err) {
           console.error('Error recording referral:', err);
         }
@@ -647,7 +693,7 @@ function FundProject({ crowdfunding, project, account, refreshProjects, web3, re
   };
 
   return (
-    <Box className={classes.fundInput}>
+    <Box style={{ marginTop: '1rem' }}>
       <TextField
         label="Amount to Fund (USD)"
         value={amountUSD}
@@ -686,65 +732,6 @@ function FundProject({ crowdfunding, project, account, refreshProjects, web3, re
       </Button>
     </Box>
   );
-}
-
-function ApproveWithdrawalButton({ project, account, multiSigApprover, refreshProjects, web3 }) {
-  const isTrustedSigner = TRUSTED_SIGNERS.some(s => s.toLowerCase() === account.toLowerCase());
-  const [alreadyApproved, setAlreadyApproved] = useState(false);
-
-  useEffect(() => {
-    const checkApproval = async () => {
-      if (!multiSigApprover || !isTrustedSigner) return;
-      try {
-        const didApprove = await multiSigApprover.methods.approvals(project.id, account).call();
-        setAlreadyApproved(didApprove);
-      } catch (error) {
-        console.error("Error checking approval:", error);
-      }
-    };
-    checkApproval();
-  }, [multiSigApprover, isTrustedSigner, project.id, account]);
-
-  const approve = async () => {
-    if (!multiSigApprover) {
-      alert('MultiSigApprover not set or not ready.');
-      return;
-    }
-    try {
-      const gasEstimate = await multiSigApprover.methods.approveWithdrawal(project.id).estimateGas({ from: account });
-      await multiSigApprover.methods.approveWithdrawal(project.id).send({ from: account, gas: gasEstimate });
-      await refreshProjects();
-      alert('Withdrawal approved!');
-      setAlreadyApproved(true);
-    } catch (error) {
-      console.error('Error approving withdrawal:', error);
-      alert('Error approving withdrawal. Check console.');
-    }
-  };
-
-  const totalFundsEth = parseFloat(web3.utils.fromWei(project.totalFunds, 'ether'));
-
-  if (!project.isOpen && totalFundsEth > 0 && isTrustedSigner) {
-    return (
-      <Box mt={2}>
-        {!alreadyApproved ? (
-          <>
-            <Typography variant="body2">
-              You are a trusted signer. Please approve withdrawal if you agree the creator can withdraw.
-            </Typography>
-            <Button variant="outlined" onClick={approve}>
-              Approve Withdrawal
-            </Button>
-          </>
-        ) : (
-          <Typography variant="body2" style={{ fontWeight: 'bold' }}>
-            You have already approved this withdrawal.
-          </Typography>
-        )}
-      </Box>
-    );
-  }
-  return null;
 }
 
 export default App;

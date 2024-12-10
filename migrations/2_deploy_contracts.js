@@ -13,8 +13,8 @@ module.exports = async function (deployer, network, accounts) {
   const crowdfundingInstance = await Crowdfunding.deployed();
 
   const trustedSigners = [
-  "0x60B3Af227f03044949c0cB97B9B046A4a99dda03",
-  "0x0Fa02132dC5be4d14309EF12e678947d262A8525"
+  "0x116470dA168103C7329bB1c646b1Aca6308A8a83",
+  "0x4efba98Ba5620891eb4Ea7dB04904DeeD2F760b6"
   ];
 
   const requiredApprovals = 2;

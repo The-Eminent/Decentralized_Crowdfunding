@@ -2,10 +2,11 @@
 pragma solidity ^0.8.0;
 
 interface IMultiSigApprover {
-    function isApproved(uint256 projectId) external view returns (bool);
-    function approveWithdrawal(uint256 projectId) external;
-    function getApprovals(uint256 projectId) external view returns (uint256);
     function requiredApprovals() external view returns (uint256);
+    function approveWithdrawalForMilestone(uint256 projectId, uint8 milestone) external;
+    function isApprovedForMilestone(uint256 projectId, uint8 milestone) external view returns (bool);
+    function isTrustedSigner(address signer) external view returns (bool);
+    function milestoneApprovals(uint256 projectId, uint8 milestone, address signer) external view returns (bool);
 }
 
 contract Crowdfunding {
@@ -18,6 +19,7 @@ contract Crowdfunding {
         address payable creator;
         bool isOpen;
         uint256 deadline;
+        uint8 milestonesClaimed; // how many increments have been withdrawn (0 to 3)
     }
 
     struct Donation {
@@ -31,24 +33,11 @@ contract Crowdfunding {
     mapping(uint256 => Donation[]) public donations; 
     mapping(uint256 => mapping(address => uint256)) public contributions;
 
-    event ProjectCreated(
-        uint256 id,
-        address indexed creator,
-        string title,
-        uint256 fundingGoal,
-        uint256 deadline
-    );
-
-    event Funded(
-        uint256 id,
-        address indexed contributor,
-        uint256 amount,
-        string comment
-    );
-
-    event FundsWithdrawn(uint256 id, uint256 amount);
-
     IMultiSigApprover public multiSigApprover;
+
+    event ProjectCreated(uint256 id, address indexed creator, string title, uint256 fundingGoal, uint256 deadline);
+    event Funded(uint256 id, address indexed contributor, uint256 amount, string comment);
+    event FundsWithdrawn(uint256 id, uint256 amount);
 
     function setMultiSigApprover(address _approver) public {
         require(address(multiSigApprover) == address(0), "Already set");
@@ -75,7 +64,8 @@ contract Crowdfunding {
             0,
             payable(msg.sender),
             true,
-            _deadline
+            _deadline,
+            0
         );
 
         emit ProjectCreated(projectCount, msg.sender, _title, _fundingGoal, _deadline);
@@ -99,16 +89,46 @@ contract Crowdfunding {
         }
     }
 
+    // Multiple increments logic:
+    // There are 3 increments total (0,1,2). 
+    // Each milestone = 1/3 of fundingGoal except last which is remainder.
+    // If multiple increments unlocked at once, withdraw them all at once if all approved.
+
     function withdrawFunds(uint256 _id) public {
         Project storage project = projects[_id];
         require(msg.sender == project.creator, "Only creator can withdraw funds");
-        require(project.totalFunds >= project.fundingGoal, "Funding goal not reached");
-        require(project.isOpen == false, "Project is still open");
-        require(address(multiSigApprover) != address(0), "MultiSigApprover not set");
-        require(multiSigApprover.isApproved(_id), "Not approved by all trusted signers");
+        require(address(multiSigApprover) != address(0), "Approver not set");
 
-        uint256 amount = project.totalFunds;
-        project.totalFunds = 0;
+        // Calculate how many increments unlocked
+        // increments: first two = fundingGoal/3 each, last = remainder
+        uint256 goal = project.fundingGoal;
+        uint256 g1 = goal / 3;
+        uint256 g2 = goal / 3;
+        uint256 g3 = goal - g1 - g2;
+
+        uint8 claimed = project.milestonesClaimed;
+        // how many increments are unlocked based on totalFunds
+        uint8 unlocked = 0;
+        if (project.totalFunds >= g1) unlocked = 1;
+        if (project.totalFunds >= g1+g2) unlocked = 2;
+        if (project.totalFunds >= goal) unlocked = 3;
+
+        require(unlocked > claimed, "No new increments unlocked");
+
+        // Check approvals for each increment from claimed to unlocked-1
+        for (uint8 m = claimed; m < unlocked; m++) {
+            require(multiSigApprover.isApprovedForMilestone(_id, m), "Not all increments approved");
+        }
+
+        // Withdraw all newly unlocked increments
+        uint256 amount = 0;
+        for (uint8 m = claimed; m < unlocked; m++) {
+            if (m == 0) amount += g1;
+            else if (m == 1) amount += g2;
+            else amount += g3;
+        }
+
+        project.milestonesClaimed = unlocked;
         project.creator.transfer(amount);
 
         emit FundsWithdrawn(_id, amount);
@@ -118,10 +138,8 @@ contract Crowdfunding {
         return donations[_id];
     }
 
-    function getApprovalStatus(uint256 _projectId) public view returns (uint256 approvedCount, uint256 requiredApprovals) {
-        require(address(multiSigApprover) != address(0), "MultiSigApprover not set.");
-        uint256 app = multiSigApprover.getApprovals(_projectId);
-        uint256 req = multiSigApprover.requiredApprovals();
-        return (app, req);
-    }
+    function getApprovalStatus() public view returns (uint256 approvedCount, uint256 requiredApprovals) {
+    // Returns dummy values since old logic is deprecated
+    return (0, multiSigApprover.requiredApprovals());
+}
 }
