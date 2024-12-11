@@ -9,7 +9,7 @@ contract ReferralRewards {
     event RewardsClaimed(address indexed user, uint256 pointsClaimed);
 
     // Record a referral when a new contributor (newUser) is referred by referrer
-    // In your funding logic after funding you call this if refParam is present
+   
     function recordReferral(address newUser, address referrer) external {
         require(newUser != address(0), "Invalid newUser");
         require(referrer != address(0), "Invalid referrer");
@@ -33,7 +33,7 @@ contract ReferralRewards {
     function claimRewards() external {
         uint256 points = referralPoints[msg.sender];
         require(points > 0, "No points to claim");
-        // For demo, just reset points to 0 to simulate claiming
+        // For demo, just reseting points to 0 to simulate claiming
         referralPoints[msg.sender] = 0;
         emit RewardsClaimed(msg.sender, points);
     }

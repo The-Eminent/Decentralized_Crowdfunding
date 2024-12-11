@@ -19,7 +19,7 @@ contract Crowdfunding {
         address payable creator;
         bool isOpen;
         uint256 deadline;
-        uint8 milestonesClaimed; // how many increments have been withdrawn (0 to 3)
+        uint8 milestonesClaimed; 
     }
 
     struct Donation {

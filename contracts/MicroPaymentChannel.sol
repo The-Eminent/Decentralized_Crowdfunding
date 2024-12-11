@@ -48,6 +48,7 @@ contract MicroPaymentChannel {
     // Helper function to generate the prefixed hash for ecrecover
     function prefixed(bytes32 hash) internal pure returns (bytes32) {
         // Ethereum signed message prefix
+        // like it ensures the signature is compatible with Ethereum wallets
         return keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", hash));
     }
 }

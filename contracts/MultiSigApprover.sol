@@ -3,10 +3,9 @@ pragma solidity ^0.8.0;
 
 contract MultiSigApprover {
     address[] public trustedSigners;
-    uint256 public requiredApprovals; // This already has a getter function requiredApprovals()
+    uint256 public requiredApprovals; 
 
-    // milestoneApprovals is a public mapping, so a getter is automatically generated.
-    // No need to define another function with the same name.
+
     mapping(uint256 => mapping(uint8 => mapping(address => bool))) public milestoneApprovals;
 
     constructor(address[] memory _trustedSigners, uint256 _requiredApprovals) {
