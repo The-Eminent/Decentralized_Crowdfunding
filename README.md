@@ -1,11 +1,5 @@
 # Decentralized Crowdfunding Platform
 
-## Team Members
-- **Kuldeep Singh Rathore**: [kuldeepsingh@csu.fullerton.edu](mailto:kuldeepsingh@csu.fullerton.edu)  
-- **Mohit Patni**: [mohitpatni@csu.fullerton.edu](mailto:mohitpatni@csu.fullerton.edu)
-
----
-
 ## Project Overview
 This project is a **Decentralized Crowdfunding Platform** built on Ethereum smart contracts, using **Solidity**, **Truffle**, and a **React.js** frontend with **Web3** integration.  
 
